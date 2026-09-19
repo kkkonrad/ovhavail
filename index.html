@@ -160,6 +160,7 @@
     disk.addEventListener('change', render);
     ram.addEventListener('change', render);
     refresh.addEventListener('click', load);
+    document.addEventListener('visibilitychange', () => !document.hidden && !refresh.disabled && load());
     load();
   </script>
 </body>
