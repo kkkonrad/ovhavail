@@ -93,6 +93,27 @@
     console.assert(Math.max(...diskSizes('hybridsoftraid-2x6000sa-2x960nvme')) === 6000, 'Błąd odczytu pojemności dysków');
     let servers = [];
     let catalogWarning = '';
+    const knownPlansKey = 'ovh-known-eco-plans-pl';
+
+    function monitorPlans(plans) {
+      if (!plans.length || !plans.every(plan => typeof plan.planCode === 'string')) return;
+      try {
+        const saved = localStorage.getItem(knownPlansKey);
+        const known = saved === null ? null : JSON.parse(saved);
+        if (known !== null && (!Array.isArray(known) || !known.every(code => typeof code === 'string'))) return;
+        const added = known === null ? [] : plans.filter(plan => !known.includes(plan.planCode));
+        if (added.length) {
+          if (!('Notification' in window) || Notification.permission !== 'granted') return;
+          new Notification('Nowe plany OVH', {
+            body: added.map(plan => `${plan.invoiceName || plan.planCode} (${plan.planCode})`).join(', '),
+            tag: 'ovh-new-eco-plans'
+          });
+        }
+        localStorage.setItem(knownPlansKey, JSON.stringify([...new Set([...(known || []), ...plans.map(plan => plan.planCode)])]));
+      } catch (error) {
+        console.warn('Nie udało się monitorować nowych planów OVH:', error);
+      }
+    }
 
     const search = document.querySelector('#search');
     const datacenter = document.querySelector('#datacenter');
@@ -143,6 +164,7 @@
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const catalog = await response.json();
             if (!Array.isArray(catalog.plans) || !Array.isArray(catalog.products)) throw new Error('Nieprawidłowy katalog');
+            monitorPlans(catalog.plans);
             return catalog;
           })
         ]);
@@ -182,7 +204,23 @@
     datacenter.addEventListener('change', render);
     disk.addEventListener('change', render);
     ram.addEventListener('change', render);
-    refresh.addEventListener('click', load);
+    refresh.addEventListener('click', () => {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().then(() => load()).catch(error => console.warn(error));
+      }
+      load();
+    });
+    // shortcut: monitoring wymaga otwartej strony; dla zamkniętej przeglądarki potrzebny jest backend z push.
+    setInterval(async () => {
+      try {
+        const response = await fetch(CATALOG, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const catalog = await response.json();
+        if (Array.isArray(catalog.plans)) monitorPlans(catalog.plans);
+      } catch (error) {
+        console.warn('Nie udało się sprawdzić nowych planów OVH:', error);
+      }
+    }, 60000);
     document.addEventListener('visibilitychange', () => !document.hidden && !refresh.disabled && load());
     load();
   </script>
