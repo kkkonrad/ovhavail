@@ -51,7 +51,7 @@
     <section class="filters" aria-label="Filtry">
       <label class="field">
         <span>Szukaj</span>
-        <input id="search" type="search" placeholder="FQN, RAM lub dysk…">
+        <input id="search" type="search" placeholder="FQN, procesor, RAM lub dysk…">
       </label>
       <label class="field">
         <span>Centrum danych</span>
@@ -79,6 +79,12 @@
 
   <script>
     const API = 'https://www.ovh.com/engine/apiv6/dedicated/server/datacenter/availabilities/';
+    const CATALOG = 'https://eu.api.ovh.com/v1/order/catalog/public/eco?ovhSubsidiary=PL';
+    const cpuLabel = cpu => cpu?.model ? [
+      `${cpu.number > 1 ? `${cpu.number}× ` : ''}${cpu.brand || ''} ${cpu.model}`.trim(),
+      cpu.cores && cpu.threads ? `${cpu.cores} rdzeni / ${cpu.threads} wątków${cpu.number > 1 ? ' na procesor' : ''}` : '',
+      cpu.frequency ? `${cpu.frequency}${cpu.boost ? `–${cpu.boost}` : ''} GHz` : ''
+    ].filter(Boolean).join(' · ') : 'brak danych';
     const available = value => typeof value === 'string' && value !== 'unavailable' && value !== 'unknown';
     const wanted = server => typeof server?.fqn === 'string' && /^.{2}(?:sys|sk)/i.test(server.fqn);
     const diskSizes = storage => [...(storage || '').matchAll(/\d+x(\d+)/gi)].map(match => Number(match[1]));
@@ -86,6 +92,7 @@
     console.assert(wanted({ fqn: '24sk102.ram-32g' }), 'Błąd dopasowania serwerów SK');
     console.assert(Math.max(...diskSizes('hybridsoftraid-2x6000sa-2x960nvme')) === 6000, 'Błąd odczytu pojemności dysków');
     let servers = [];
+    let catalogWarning = '';
 
     const search = document.querySelector('#search');
     const datacenter = document.querySelector('#datacenter');
@@ -101,7 +108,7 @@
       const maxDisk = Number(disk.value);
       const selectedRam = [...ram.querySelectorAll(':checked')].map(input => Number(input.value));
       const filtered = servers.filter(server => {
-        const text = [server.fqn, server.memory, server.storage].join(' ').toLowerCase();
+        const text = [server.fqn, server.cpu, server.memory, server.storage].join(' ').toLowerCase();
         const memory = Number(server.memory?.match(/ram-(\d+)g/i)?.[1]);
         const disks = diskSizes(server.storage);
         return (!query || text.includes(query))
@@ -110,12 +117,13 @@
           && (!maxDisk || (disks.length && Math.max(...disks) <= maxDisk));
       });
 
-      status.textContent = `${filtered.length} konfiguracji`;
+      status.textContent = `${filtered.length} konfiguracji${catalogWarning}`;
       results.innerHTML = filtered.length ? filtered.map(server => `
         <article>
           <div class="top"><div>
             <h2>${escapeHtml(server.fqn)}</h2>
             <div class="details">
+              <span>CPU: ${escapeHtml(server.cpu)}</span>
               <span>RAM: ${escapeHtml(server.memory || '—')}</span>
               <span>Dyski: ${escapeHtml(server.storage || '—')}</span>
             </div>
@@ -129,13 +137,28 @@
       status.textContent = 'Pobieranie danych…';
       results.innerHTML = '';
       try {
-        const response = await fetch(API, { cache: 'no-store' });
+        const [availabilityResult, catalogResult] = await Promise.allSettled([
+          fetch(API, { cache: 'no-store' }),
+          fetch(CATALOG, { cache: 'no-store', signal: AbortSignal.timeout(15000) }).then(async response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const catalog = await response.json();
+            if (!Array.isArray(catalog.plans) || !Array.isArray(catalog.products)) throw new Error('Nieprawidłowy katalog');
+            return catalog;
+          })
+        ]);
+        if (availabilityResult.status === 'rejected') throw availabilityResult.reason;
+        const response = availabilityResult.value;
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (!Array.isArray(data)) throw new Error('Nieprawidłowy format odpowiedzi');
+        const catalog = catalogResult.status === 'fulfilled' ? catalogResult.value : { plans: [], products: [] };
+        catalogWarning = catalogResult.status === 'rejected' ? ' · Nie udało się pobrać informacji o procesorach.' : '';
+        const products = new Map(catalog.products.map(product => [product.name, product]));
+        const cpus = new Map(catalog.plans.map(plan => [plan.planCode, cpuLabel(products.get(plan.product)?.blobs?.technical?.server?.cpu)]));
 
         servers = data.filter(wanted).map(server => ({
           ...server,
+          cpu: cpus.get(server.planCode) || 'brak danych',
           datacenters: Array.isArray(server.datacenters) ? server.datacenters.filter(item => available(item.availability)) : []
         })).filter(server => server.datacenters.length);
 
