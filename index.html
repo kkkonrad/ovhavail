@@ -185,7 +185,7 @@
         })).filter(server => server.datacenters.length);
 
         const selected = datacenter.value;
-        const centers = [...new Set(servers.flatMap(server => server.datacenters.map(item => item.datacenter)))].sort();
+        const centers = [...new Set(['waw', ...servers.flatMap(server => server.datacenters.map(item => item.datacenter))])].sort();
         datacenter.innerHTML = '<option value="">Wszystkie centra danych</option>' + centers.map(dc => `<option value="${escapeHtml(dc)}"${dc === selected ? ' selected' : ''}>${escapeHtml(dc.toUpperCase())}</option>`).join('');
 
         const selectedMemory = new Set([...ram.querySelectorAll(':checked')].map(input => Number(input.value)));
